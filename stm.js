@@ -130,6 +130,7 @@ function handle_http_request(req, resp) {
         log("Getting chunk "+chunknum+" for rate "+rate);
         return tcode.chunk(rate, chunknum)
                .then(function(data) {
+                   log("Delivering "+rate+"["+chunknum+"]");
                    resp.writeHead(200, { 'Content-Type': 'video/MP2T' }); // stm.py uses 'application/vnd.apple.mpegurl' here.
                    resp.end(data);
                }, function(error) {
