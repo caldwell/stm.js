@@ -260,7 +260,8 @@ Transcode.prototype.encode = function(rate, chunk_num) {
     mkdir(this.dir);
     var filename         = this.chunkpath(rate,chunk_num);
     var filename_partial = filename + ".partial";
-    var ffmpeg = spawn('ffmpeg', [ '-y',
+    var param;
+    var ffmpeg = spawn('ffmpeg', param=[ '-y',
                                    '-accurate_seek',
                                    '-ss', chunk_num * chunk_seconds,
                                    '-i', this.input_file,
@@ -273,7 +274,7 @@ Transcode.prototype.encode = function(rate, chunk_num) {
                                    filename_partial
                                  ]);
     this.encoding.process = ffmpeg;
-    log("spawned ffmpeg: pid="+ffmpeg.pid+" for "+rate+"["+chunk_num+"]");
+    log("ffmpeg ["+ffmpeg.pid+"] started for "+rate+"["+chunk_num+"]: "+JSON.stringify(param));
     var stderr = '';
     ffmpeg.stderr.on('data', function (data) {
          stderr += data;
