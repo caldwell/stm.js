@@ -17,8 +17,12 @@ var spawn    = require('child_process').spawn;
 var app = require('http').createServer(handle_http_request);
 app.listen(app_port);
 
+function log(message) {
+    console.log(Date().toString()+" "+(typeof message == 'string' ? message : JSON.stringify(message)));
+}
+
 function handle_http_request(req, resp) {
-    console.log(req.method + ' ' + req.url);
+    log(req.method + ' ' + req.url);
 
     var url = require('url').parse(req.url);
     if (decodeURIComponent(url.pathname).match(/\.\.(\/|$)/))
@@ -75,7 +79,7 @@ function handle_http_request(req, resp) {
                 length: media.duration,
                 description: media.metadata.description
             }))
-            console.log("metadata: "+JSON.stringify(x));
+            log("metadata: "+JSON.stringify(x));
         })
         .done();
     }
@@ -93,7 +97,7 @@ function handle_http_request(req, resp) {
 
         var file = decodeURIComponent(path.join(app_root[m[2]].path, m[3]));
 
-        console.log("Starting transcode with cookie "+cookie);
+        log("Starting transcode with cookie "+cookie);
         var tcode = Transcode.session(cookie, file, opts);
         resp.writeHead(200, { 'Content-Type': 'application/vnd.apple.mpegurl' });
         resp.end(tcode.master_m3u8());
@@ -106,7 +110,7 @@ function handle_http_request(req, resp) {
         var filetype = m[3] || m[5];
 
         var tcode = Transcode.session(cookie);
-        console.log("cookie="+cookie);
+        log("cookie="+cookie);
 
         if (!tcode) {
             resp.writeHead(404, { 'Content-Type': 'application/json' });
@@ -114,7 +118,7 @@ function handle_http_request(req, resp) {
         }
 
         if (filetype == 'm3u8') {
-            console.log("Getting m3u8 for rate "+rate);
+            log("Getting m3u8 for rate "+rate);
             return tcode.m3u8(rate)
                    .then(function(data) {
                        resp.writeHead(200, { 'Content-Type': 'application/vnd.apple.mpegurl' });
@@ -123,7 +127,7 @@ function handle_http_request(req, resp) {
                    .done();
         }
 
-        console.log("Getting chunk "+chunknum+" for rate "+rate);
+        log("Getting chunk "+chunknum+" for rate "+rate);
         return tcode.chunk(rate, chunknum)
                .then(function(data) {
                    resp.writeHead(200, { 'Content-Type': 'video/MP2T' }); // stm.py uses 'application/vnd.apple.mpegurl' here.
@@ -143,9 +147,9 @@ function handle_http_request(req, resp) {
 function get_metadata(file) {
     return navcodec.open(file)
         .then(function(media) {
-            console.log("Metadata for: "+file);
-            console.log(media.metadata);
-            console.log({duration: media.duration,
+            log("Metadata for: "+file);
+            log(media.metadata);
+            log({duration: media.duration,
                          width: media.width,
                          height: media.height,
                          videoBitrate: media.videoBitrate,
@@ -168,7 +172,7 @@ var rates = {
 }
 
 function mkdir(dir) {
-    console.log('mkdir "'+dir+'"');
+    log('mkdir "'+dir+'"');
     try {
         fs.mkdirSync(dir);
     } catch(e) {
@@ -181,7 +185,7 @@ function Transcode(cookie, file, options) {
     this.promises = [];
 
     mkdir(transcode_dir);
-    console.log("Transcode file: "+file+" with options: "+JSON.stringify(options));
+    log("Transcode file: "+file+" with options: "+JSON.stringify(options));
 
     this.input_file = file;
     this.cookie = cookie;
@@ -211,7 +215,7 @@ Transcode.prototype.chunk = function(rate, chunk_num) {
     else
         promise = this.kick(rate, chunk_num);
     if (this.encoding)
-        console.log("current="+this.encoding.rate+"["+this.encoding.chunk_num+"], request="+rate+"["+chunk_num+"]");
+        log("current="+this.encoding.rate+"["+this.encoding.chunk_num+"], request="+rate+"["+chunk_num+"]");
 
     var _this=this;
     return promise
@@ -232,7 +236,7 @@ Transcode.prototype.kick = function(rate, chunk_num) {
             var promise = Q.resolve(filename)
         else {
             if (_this.encoding && _this.encoding.process) {
-                console.log("Killing "+_this.encoding.process.pid);
+                log("Killing "+_this.encoding.process.pid);
                 _this.encoding.process.kill('SIGKILL');
             }
             _this.encoding = { rate: rate,
@@ -246,7 +250,7 @@ Transcode.prototype.kick = function(rate, chunk_num) {
                        delete _this.encoding;
                    if (_this.last_chunk_requested + encode_ahead > chunk_num)
                        _this.kick(rate, chunk_num+1);
-                   console.log("kicking? "+_this.last_chunk_requested+" + "+encode_ahead+" < "+chunk_num);
+                   log("kicking? "+_this.last_chunk_requested+" + "+encode_ahead+" < "+chunk_num);
                    return filename;
                });
     });
@@ -269,7 +273,7 @@ Transcode.prototype.encode = function(rate, chunk_num) {
                                    filename_partial
                                  ]);
     this.encoding.process = ffmpeg;
-    console.log("spawned ffmpeg: pid="+ffmpeg.pid+" for "+rate+"["+chunk_num+"]");
+    log("spawned ffmpeg: pid="+ffmpeg.pid+" for "+rate+"["+chunk_num+"]");
     var stderr = '';
     ffmpeg.stderr.on('data', function (data) {
          stderr += data;
@@ -277,11 +281,11 @@ Transcode.prototype.encode = function(rate, chunk_num) {
     var deferred = Q.defer();
     var _this = this;
     ffmpeg.on('close', function(code) {
-        console.log("ffmpeg ["+ffmpeg.pid+"] exited ("+code+")");
+        log("ffmpeg ["+ffmpeg.pid+"] exited ("+code+")");
         if (code != 0 && code != undefined /* SIGKILL causes this */)
             return fs.unlink(filename_partial, function() {
-                       console.log(stderr+"\n"+
-                                   "error: ffmpeg exited with code "+code);
+                       log(stderr+"\n"+
+                           "error: ffmpeg exited with code "+code);
                        deferred.reject("ffmpeg exited with code "+code);
                    });
         return Q.nfcall(fs.rename, filename_partial, filename)
