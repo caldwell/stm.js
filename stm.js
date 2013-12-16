@@ -252,6 +252,9 @@ Transcode.prototype.kick = function(rate, chunk_num) {
                        _this.kick(rate, chunk_num+1);
                    log("kicking? "+_this.last_chunk_requested+" + "+encode_ahead+" < "+chunk_num);
                    return filename;
+               }, function(error) {
+                   if (error != "killed")
+                       return Q.reject(error);
                });
     });
 }
@@ -283,11 +286,15 @@ Transcode.prototype.encode = function(rate, chunk_num) {
     var _this = this;
     ffmpeg.on('close', function(code) {
         log("ffmpeg ["+ffmpeg.pid+"] exited ("+code+")");
-        if (code != 0 && code != undefined /* SIGKILL causes this */)
+        if (code != 0)
             return fs.unlink(filename_partial, function() {
-                       log(stderr+"\n"+
-                           "error: ffmpeg exited with code "+code);
-                       deferred.reject("ffmpeg exited with code "+code);
+                       if (code == undefined) {
+                           deferred.reject("killed");
+                       } else {
+                           log(stderr+"\n"+
+                                       "error: ffmpeg exited with code "+code);
+                           deferred.reject("ffmpeg exited with code "+code);
+                       }
                    });
         return Q.nfcall(fs.rename, filename_partial, filename)
                .then(function(data) {
