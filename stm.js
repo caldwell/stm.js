@@ -208,24 +208,23 @@ Transcode.prototype.chunkname = function(rate, chunk_num){ return rate + "-" + c
 Transcode.prototype.chunkpath = function(rate, chunk_num){ return path.join(this.dir, this.chunkname(rate,chunk_num)) }
 Transcode.prototype.chunk = function(rate, chunk_num) {
     this.last_chunk_requested = chunk_num;
-    var promise;
-    if (this.encoding &&
-        this.encoding.rate == rate &&
-        this.encoding.chunk_num == chunk_num)
-        promise = this.encoding.promise;
-    else
-        promise = this.kick(rate, chunk_num);
+
     if (this.encoding)
         log("current="+this.encoding.rate+"["+this.encoding.chunk_num+"], request="+rate+"["+chunk_num+"]");
 
     var _this=this;
-    return promise
+    return this.kick(rate, chunk_num)
            .then(function(filename) {
                return Q.nfcall(fs.readFile, filename);
            });
 }
 
 Transcode.prototype.kick = function(rate, chunk_num) {
+    if (this.encoding &&
+        this.encoding.rate == rate &&
+        this.encoding.chunk_num == chunk_num)
+        return this.encoding.promise;
+
     var _this = this;
     return this.meta.then(function(media) {
         var chunks = Math.ceil(media.duration / chunk_seconds);
