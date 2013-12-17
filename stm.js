@@ -69,17 +69,22 @@ function handle_http_request(req, resp) {
         // ffmpeg-stm returns:
         // {"artist":"Buffy The Vampire Slayer","title":"When She Was Bad","length":2725.034667,"audio_streams":[{"language":"eng","trans":"-----"},{"language":"eng","trans":"c----"}],"subtitle_streams":[],"has_video":true,"trans":"--h-v--b--"}
         // {"length":2647.776000,"audio_streams":[{"language":"und","trans":"ccb--"}],"subtitle_streams":[],"has_video":true,"trans":"-lh-vwh---"}
-        get_metadata(file)
-        .then(function(media) {
-            resp.writeHead(200, { 'Content-Type': 'application/json' });
-            var x;
-            resp.end(JSON.stringify(x={
+        Q.all([get_metadata(file),
+               get_thumbnail(file)])
+        .spread(function(media, thumbnail) {
+            var json = JSON.stringify({
                 artist: media.metadata.show,
                 title: media.metadata.title,
                 length: media.duration,
                 description: media.metadata.description
-            }))
-            log("metadata: "+JSON.stringify(x));
+            });
+            resp.writeHead(200, { 'Content-Type': 'application/json',
+                                  'Json-Length': json.length,
+                                  'Content-Length': json.length + thumbnail.length,
+                                });
+            // Yes, we catenate text and binary data together under the banner of application/json. Don't blame me, I didn't design this.
+            resp.end(Buffer.concat([new Buffer(json),thumbnail]))
+            log("metadata: "+json);
         })
         .done();
     }
@@ -160,6 +165,33 @@ function get_metadata(file) {
                         });
             return Q.resolve(media);
         });
+}
+
+function get_thumbnail(file) {
+    var param;
+    var ffmpeg = spawn('ffmpeg', param=['-y',
+                                        '-noaccurate_seek',
+                                        '-ss', '15',
+                                        '-i', file,
+                                        '-frames:v', '1',
+                                        '-r', '1',
+                                        '-filter', 'scale=width=108:height=-1',
+                                        '-f', 'image2',
+                                        '-'
+                                       ]);
+    var deferred = Q.defer();
+    var jpeg=[], stderr='';
+    //ffmpeg.stdout.setEncoding('binary'); // Do not set encoding! If you do it will become *not* binary, no matter what you do. See: https://github.com/joyent/node/blob/v0.10.22-release/lib/_stream_readable.js#L193
+    ffmpeg.stdout.on('data', function(data) { jpeg.push(data); });
+    ffmpeg.stderr.on('data', function(data) { stderr += data; });
+    ffmpeg.on('close', function(code) {
+        if (code == 0)
+            deferred.resolve(Buffer.concat(jpeg));
+        else
+            deferred.reject(stderr+"\n"+
+                            "ffmpeg exited with code "+code+"\n");
+    });
+    return deferred.promise;
 }
 
 var rates = {
