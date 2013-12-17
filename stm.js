@@ -309,7 +309,7 @@ Transcode.prototype.encode = function(rate, chunk_num) {
                                    filename_partial
                                  ]);
     this.encoding.process = ffmpeg;
-    log("ffmpeg ["+ffmpeg.pid+"] started for "+rate+"["+chunk_num+"]: "+JSON.stringify(param));
+    log("ffmpeg ["+ffmpeg.pid+"] started for "+rate+"["+chunk_num+"]: ffmpeg "+param.map(function(p) { return (''+p).match(/ /) ? '"'+p+'"' : p }).join(' '));
     var stderr = '';
     ffmpeg.stderr.on('data', function (data) {
          stderr += data;
