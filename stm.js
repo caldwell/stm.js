@@ -194,15 +194,51 @@ function get_thumbnail(file) {
     return deferred.promise;
 }
 
-var rates = {
-    'veryhigh': 2048000,
-    'high':     1440000,
-    'midhigh':   720000,
-    'mid':       360000,
-    'midlow':    144000,
-    'low':        96000,
-    'verylow':    64000
+var common_ffmpeg_opts = { '-ar': 48000,
+                           '-vprofile': 'baseline',
+                           '-level': 30,
+                           '-me_range': 16,
+                           '-sc_threshold': 0,
+                           '-qmin': 15,
+                           '-qmax': 51,
+                           '-qdiff': 4,
+                           '-flags': '+loop',
+//                           '-cmp': '+chroma',
+                           '-partitions': '+parti8x8+parti4x4+partp8x8+partb8x8',
+                           '-bufsize': 2048 * 1024,
+                           '-minrate': 0,
+                         };
+
+var _keys =   [ 'rate',   '-maxrate','-b:a',   '-ac',
+                                                  '-qcomp',
+                                                          '-subq',
+                                                             '-refs',
+                                                                '-crf',
+                                                                    '-me_method',
+                                                                           'maxwidth',
+                                                                                 'maxheight'];
+var _rates = {
+    veryhigh: [ 2048000,  2304*1024, 192*1024, 2, '0.35', 1, 1, 24, 'hex', 1280, 720 ],
+    high:     [ 1440000,  1440*1024, 192*1024, 2, '0.35', 4, 1, 24, 'hex',  640, 480 ],
+    midhigh:  [  720000,   720*1024, 128*1024, 2, '0.25', 4, 1, 24, 'dia',  480, 320 ],
+    mid:      [  360000,   288*1024,  96*1024, 2, '0.15', 4, 2, 25, 'dia',  360, 240 ],
+    midlow:   [  144000,    84*1024,  48*1024, 1, '0.15', 8, 4, 23, 'umh',  240, 160 ],
+    low:      [   96000,    72*1024,  32*1024, 1, '0.15', 8, 6, 25, 'umh',  192, 128 ],
+    verylow:  [   64000,    48*1024,  16*1024, 1, '0',    8, 6, 23, 'umh',  192, 128 ],
+};
+
+var rates = {};
+for (var r in _rates) {
+    rates[r] = {}
+    for (var k in _keys)
+        rates[r][_keys[k]] = _rates[r][k];
+    //rates[r]['-b'] = rates[r]['-maxrate'] + rates[r]['-b:a'];
 }
+
+for (var li in rates)
+    for (var oi in common_ffmpeg_opts)
+        if (rates[li][oi] == undefined)
+            rates[li][oi] = common_ffmpeg_opts[oi];
 
 function mkdir(dir) {
     log('mkdir "'+dir+'"');
@@ -274,7 +310,7 @@ Transcode.prototype.kick = function(rate, chunk_num) {
             _this.encoding = { rate: rate,
                                chunk_num: chunk_num,
                              };
-            var promise = _this.encoding.promise = _this.encode(rate, chunk_num);
+            var promise = _this.encoding.promise = _this.encode(rate, chunk_num, media);
         }
         return promise
                .then(function(filename) {
@@ -291,23 +327,48 @@ Transcode.prototype.kick = function(rate, chunk_num) {
     });
 }
 
-Transcode.prototype.encode = function(rate, chunk_num) {
+Array.prototype.flatten = function() { // Only flattens one level.
+    return Array.prototype.concat.apply([], this);
+}
+
+function shrink_to_fit(size, max) {
+    if (size.w < max.w && size.h < max.h)
+        return;
+    var fit = {};
+    var sa = size.w/size.h, ma = max.w/max.h;
+    if (sa > ma) {
+        fit.w = Math.min(size.w, max.w);
+        fit.h = fit.w / sa;
+    } else {
+        fit.h = Math.min(size.h, max.h);
+        fit.w = fit.h * sa;
+    }
+    fit.w = fit.w & ~1; // mpeg likes things rounded to even numbers
+    fit.h = fit.h & ~1;
+    return fit;
+}
+
+Transcode.prototype.encode = function(rate, chunk_num, media) {
     mkdir(this.dir);
     var filename         = this.chunkpath(rate,chunk_num);
     var filename_partial = filename + ".partial";
+    var resize = shrink_to_fit({w:media.width, h:media.height}, {w:rates[rate].maxwidth, h:rates[rate].maxheight});
     var param;
-    var ffmpeg = spawn('ffmpeg', param=[ '-y',
-                                   '-accurate_seek',
-                                   '-ss', chunk_num * chunk_seconds,
-                                   '-i', this.input_file,
-                                   '-t', chunk_seconds,
-                                   '-codec:v', 'h264',
-                                   '-codec:a', 'libfaac',
-                                   '-b:v', rates[rate],
-                                   '-b:a', '192k',
-                                   '-f', 'mpegts',
-                                   filename_partial
-                                 ]);
+    var ffmpeg = spawn('ffmpeg', param=[].concat([ '-y',
+                                                   '-accurate_seek',
+                                                   '-ss', chunk_num * chunk_seconds,
+                                                   '-i', this.input_file,
+                                                   '-t', chunk_seconds,
+                                                   '-f', 'mpegts',
+                                                   '-codec:a', 'libmp3lame',
+                                                   '-codec:v', 'h264',
+                                                 ],
+                                                 Object.keys(rates[rate])
+                                                 .filter(function(opt) { return opt[0] == '-' })
+                                                 .map(function(opt) { return [ opt, rates[rate][opt] ] }).flatten(),
+                                                 resize ? ['-filter:v', 'scale=width='+resize.w+':height='+resize.h] : [],
+                                                 [filename_partial])
+                                 );
     this.encoding.process = ffmpeg;
     log("ffmpeg ["+ffmpeg.pid+"] started for "+rate+"["+chunk_num+"]: ffmpeg "+param.map(function(p) { return (''+p).match(/ /) ? '"'+p+'"' : p }).join(' '));
     var stderr = '';
@@ -341,8 +402,8 @@ Transcode.prototype.encode = function(rate, chunk_num) {
 Transcode.prototype.master_m3u8 = function() {
     var _this = this;
     return "#EXTM3U\n" +
-        Object.keys(rates).sort(function(a,b) { return rates[b] - rates[a] })
-        .map(function(r) { return "#EXT-X-STREAM-INF:PROGRAM-ID=1,BANDWIDTH="+rates[r]+"\n" +
+        Object.keys(rates).sort(function(a,b) { return rates[b]['rate'] - rates[a]['rate'] })
+        .map(function(r) { return "#EXT-X-STREAM-INF:PROGRAM-ID=1,BANDWIDTH="+rates[r]['rate']+"\n" +
                                   "/session/"+encodeURIComponent(_this.cookie)+"/"+r+".m3u8\n" })
         .join('');
 }
