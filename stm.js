@@ -3,7 +3,7 @@ var app_port = 9968;
 var app_root = [ { path:'/home/david/Movies/', name:'Movies' } ];
 var types= ["aif","m2ts","ts","flac","wmv","ogm","ogg","wma","m4a","vob","dif","dv","flv","asf","mp2","mp3","ac3","aac","mpeg4","mp4","m4v","mpeg","mkv","mpg","mov","gvi","avi"];
 var valid_type = {}; types.forEach(function (t) { valid_type['.'+t] = true });
-var chunk_seconds = 5;
+var chunk_seconds = 10;
 var encode_ahead = 5;
 
 var path     = require('path');
