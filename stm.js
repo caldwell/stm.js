@@ -12,6 +12,8 @@ var glob     = require('glob');
 var Q        = require('q');
 var navcodec = require('navcodec');
 var spawn    = require('child_process').spawn;
+var events   = require('events');
+var util     = require('util');
 
 var app = require('http').createServer(handle_http_request);
 app.listen(app_port);
@@ -20,8 +22,21 @@ function log(message) {
     console.log(Date().toString()+" "+(typeof message == 'string' ? message : JSON.stringify(message)));
 }
 
+var session_data = {};
+
 function handle_http_request(req, resp) {
     log(req.method + ' ' + req.url);
+
+    var cookie = {};
+    (req.headers.cookie || "").split(/; */).forEach(function(c) {
+        var kv=c.split(/=/);
+        cookie[kv[0]] = kv[1];
+    });
+
+    var session_id = cookie.session || Math.floor(Math.random()*0xffffff+1000);
+    if (!cookie.session)
+        resp.setHeader("Set-Cookie", ["session="+session_id+"; path=/"]);
+    var session = session_data[session_id] = session_data[session_id] || {};
 
     var url = require('url').parse(req.url);
     if (decodeURIComponent(url.pathname).match(/\.\.(\/|$)/))
@@ -89,7 +104,7 @@ function handle_http_request(req, resp) {
     }
 
     // GET /stream/device=Mac,rate=local,aud=any,sub=any,ss=0,gain=0,art=yes,dir=default,enc=Auto,pdur=8,trans=both/0/TV/14%20NCIS.S10E14.720p.HDTV.X264-DIMENSION.mkv/index.m3u8?offset=0.000000
-    else if (m = url.pathname.match(/^\/stream\/([^\/]+)\/(\d+)\/(.*)\/index\.m3u8$/)) {
+    else if (m = url.pathname.match(/^\/stream\/([^\/]+)\/(\d+)\/(.*)\/(\w+)(?:\.(m3u8)|-(\d+)\.(ts))$/)) {
         var option_string = m[1];
         var opts = {};
         option_string.split(/,/).forEach(function(o) {
@@ -97,33 +112,24 @@ function handle_http_request(req, resp) {
             opts[kv[0]] = kv[1];
         });
 
-        var cookie = decodeURIComponent(m[2] + "/" + m[3]);
+        var videofile = decodeURIComponent(path.join(app_root[m[2]].path, m[3]));
+        var rate = m[4];
+        var chunknum = m[6]-0;
+        var filetype = m[5] || m[7];
 
-        var file = decodeURIComponent(path.join(app_root[m[2]].path, m[3]));
-
-        log("Starting transcode with cookie "+cookie);
-        var tcode = Transcode.session(cookie, file, opts);
-        resp.writeHead(200, { 'Content-Type': 'application/vnd.apple.mpegurl' });
-        resp.end(tcode.master_m3u8());
-    }
-
-    else if (m = url.pathname.match(/^\/session\/([^\/]+)\/(.*)(?:\.(m3u8)|-(\d+)\.(ts))$/)) {
-        var cookie = decodeURIComponent(m[1]);
-        var rate = m[2];
-        var chunknum = m[4]-0;
-        var filetype = m[3] || m[5];
-
-        var tcode = Transcode.session(cookie);
-        log("cookie="+cookie);
-
-        if (!tcode) {
-            resp.writeHead(404, { 'Content-Type': 'application/json' });
-            return resp.end(JSON.stringify({ error: "Session not found", session:cookie }));
+        if (!session.transcode || session.transcode.input_file != videofile) {
+            if (session.transcode)
+                session.transcode.stop();
+            session.transcode = new Transcode(videofile, opts);
+            log("Starting transcode for session "+session_id);
         }
 
-        if (filetype == 'm3u8') {
+        if (rate == "index" && filetype == "m3u8") {
+            resp.writeHead(200, { 'Content-Type': 'application/vnd.apple.mpegurl' });
+            resp.end(session.transcode.master_m3u8());
+        } else if (filetype == "m3u8") {
             log("Getting m3u8 for rate "+rate);
-            return tcode.m3u8(rate)
+            return session.transcode.m3u8(rate)
                    .then(function(data) {
                        resp.writeHead(200, { 'Content-Type': 'application/vnd.apple.mpegurl' });
                        resp.end(data);
@@ -132,7 +138,7 @@ function handle_http_request(req, resp) {
         }
 
         log("Getting chunk "+chunknum+" for rate "+rate);
-        return tcode.chunk(rate, chunknum)
+        return session.transcode.chunk(rate, chunknum)
                .then(function(data) {
                    log("Delivering "+rate+"["+chunknum+"]");
                    resp.writeHead(200, { 'Content-Type': 'video/MP2T' }); // stm.py uses 'application/vnd.apple.mpegurl' here.
@@ -239,26 +245,22 @@ for (var li in rates)
         if (rates[li][oi] == undefined)
             rates[li][oi] = common_ffmpeg_opts[oi];
 
-function Transcode(cookie, file, options) {
+function Transcode(file, options) {
     log("Transcode file: "+file+" with options: "+JSON.stringify(options));
 
     this.input_file = file;
-    this.cookie = cookie;
 
     this.meta = get_metadata(file);
 }
 
-Transcode.cookieify = function(file) { return file.replace(/\//g, '_') };
-Transcode.sessions = [];
-Transcode.session = function(_cookie, file, opts) {
-    var cookie = Transcode.cookieify(_cookie);
-    if (!Transcode.sessions[cookie] && file)
-        Transcode.sessions[cookie] = new Transcode(cookie, file, opts);
-    return Transcode.sessions[cookie];
-};
-
 Transcode.prototype.chunkname = function(rate, chunk_num){ return rate + "-" + chunk_num + ".ts" };
 Transcode.prototype.chunk = function(rate, chunk_num) {
+    if (this.encoder_error) {
+        var e = this.encoder_error;
+        delete this.encoder_error;
+        return Q.resolve(e);
+    }
+
     if (!this.encoder ||
         this.rate != rate ||
         this.next_chunk_num != chunk_num)  {
@@ -286,16 +288,28 @@ Transcode.prototype.start = function(rate, chunk_num) {
     this.packetizer = new mpeg2ts.Packetizer();
     this.chunkifier = new mpeg2ts.TimeBasedChunkifier(chunk_seconds/*, chunk_num*chunk_seconds*/);
 
-    if (this.encoder) {
-        log("Killing "+this.encoder.pid);
-        this.encoder.kill('SIGKILL');
-    }
+    if (this.encoder)
+        this.encoder.kill();
 
     var _this = this;
     this.meta.then(function(media) {
-        _this.encode(rate, chunk_num, media, function(data) {
+        log("Starting encode for "+_this.input_file+" "+rate+"["+chunk_num+"]");
+        try {
+        _this.encoder = new Encode(_this.input_file, rate, chunk_num, media);
+        } catch(e) {
+            log(e.message);
+            throw(e);
+        }
+        _this.encoder.on('data', function(data) {
             // log("Giving packetizer "+data.length+" bytes");
             _this.packetizer.write(data);
+        });
+        _this.encoder.on('close', function() {
+            _this.chunkifier.flush();
+        });
+        _this.encoder.on('error', function(message) {
+            _this.encoder_error = message;
+            log("error! "+message);
         });
     });
 
@@ -312,14 +326,14 @@ Transcode.prototype.start = function(rate, chunk_num) {
             _this.fifo.push(chunk);
             log("Pushing chunk into fifo (now "+_this.fifo.length+" deep)");
             if (_this.fifo.length >= encode_ahead)
-                _this.encoder.stdout.pause();
+                _this.encoder.pause();
         }
         _this.next_encoded_chunk++;
     });
 }
 
 Transcode.prototype.kick = function() {
-    this.encoder.stdout.resume(); // the spice must flow
+    this.encoder.resume(); // the spice must flow
 
     this.next_chunk_num++;
     this.next_chunk_deferred = Q.defer();
@@ -351,13 +365,16 @@ function shrink_to_fit(size, max) {
     return fit;
 }
 
-Transcode.prototype.encode = function(rate, chunk_num, media, data_callback) {
+function Encode(input_file, rate, chunk_num, media, data_callback) {
+    events.EventEmitter.call(this);
     var resize = shrink_to_fit({w:media.width, h:media.height}, {w:rates[rate].maxwidth, h:rates[rate].maxheight});
     var param;
-    var ffmpeg = spawn('ffmpeg', param=[].concat([ '-y',
+    log("spawning ffmpeg");
+    this.input_file = input_file;
+    this.process = spawn('ffmpeg', param=[].concat([ '-y',
                                                    '-accurate_seek',
                                                    '-ss', chunk_num * chunk_seconds,
-                                                   '-i', this.input_file,
+                                                   '-i', input_file,
                                                    '-f', 'mpegts',
                                                    '-codec:a', 'libmp3lame',
                                                    '-codec:v', 'h264',
@@ -368,27 +385,43 @@ Transcode.prototype.encode = function(rate, chunk_num, media, data_callback) {
                                                  resize ? ['-filter:v', 'scale=width='+resize.w+':height='+resize.h] : [],
                                                  ["-"])
                                  );
-    this.encoder = ffmpeg;
-    log("ffmpeg ["+ffmpeg.pid+"] started for "+rate+"["+chunk_num+"]: ffmpeg "+param.map(function(p) { return (''+p).match(/ /) ? '"'+p+'"' : p }).join(' '));
+    log("ffmpeg ["+this.process.pid+"] started for "+rate+"["+chunk_num+"]: ffmpeg "+param.map(function(p) { return (''+p).match(/ /) ? '"'+p+'"' : p }).join(' '));
 
-    ffmpeg.stdout.resume();
-    ffmpeg.stdout.on('data', function (data) {
-         // log("Got data from ffmpeg ("+data.length+" bytes)");
-         data_callback(data);
+    var _this=this;
+    this.process.stdout.resume();
+    this.process.stdout.on('data', function (data) {
+        // log("Got data from ffmpeg ("+data.length+" bytes)");
+        _this.emit('data', data);
     });
 
     var stderr = '';
-    ffmpeg.stderr.on('data', function (data) {
+    this.process.stderr.on('data', function (data) {
          stderr += data;
     });
 
-    ffmpeg.on('close', function(code) {
-        log("ffmpeg ["+ffmpeg.pid+"] exited ("+code+")");
+    this.process.on('close', function(code) {
+        log("ffmpeg ["+this.process.pid+"] exited ("+code+")");
         if (code != 0 && code != undefined) {
             log(stderr+"\n"+
                 "error: ffmpeg exited with code "+code);
-        }
+            _this.emit('error', stderr);
+        } else
+            _this.emit('close');
     });
+}
+util.inherits(Encode, events.EventEmitter);
+Encode.prototype.kill = function()
+{
+    log("Killing "+this.process.pid);
+    this.process.kill('SIGKILL');
+}
+Encode.prototype.pause = function() {
+    log("Pausing "+this.input_file+"["+this.process.pid+"]");
+    this.process.stdout.pause();
+}
+Encode.prototype.resume = function() {
+    log("Resuming "+this.input_file+"["+this.process.pid+"]");
+    this.process.stdout.resume();
 }
 
 Transcode.prototype.master_m3u8 = function() {
@@ -396,7 +429,7 @@ Transcode.prototype.master_m3u8 = function() {
     return "#EXTM3U\n" +
         Object.keys(rates).sort(function(a,b) { return rates[b]['rate'] - rates[a]['rate'] })
         .map(function(r) { return "#EXT-X-STREAM-INF:PROGRAM-ID=1,BANDWIDTH="+rates[r]['rate']+"\n" +
-                                  "/session/"+encodeURIComponent(_this.cookie)+"/"+r+".m3u8\n" })
+                                  r+".m3u8\n" })
         .join('');
 }
 
@@ -408,7 +441,7 @@ Transcode.prototype.m3u8 = function(rate) {
                    "#EXT-X-TARGETDURATION:"+chunk_seconds+"\n";
         for (var i=0; i<chunks; i++)
             m3u8 += "#EXTINF:"+chunk_seconds+",\n" +
-                    "/session/"+encodeURIComponent(_this.cookie)+"/"+_this.chunkname(rate, i)+"\n";
+                    _this.chunkname(rate, i)+"\n";
         m3u8 += "#EXT-X-ENDLIST\n";
        return Q.resolve(m3u8);
     });
