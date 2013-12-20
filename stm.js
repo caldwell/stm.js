@@ -1,7 +1,6 @@
 //  Copyright (c) 2013 David Caldwell,  All Rights Reserved.
 var app_port = 9968;
 var app_root = [ { path:'/home/david/Movies/', name:'Movies' } ];
-var transcode_dir = '/home/david/.stm-node';
 var types= ["aif","m2ts","ts","flac","wmv","ogm","ogg","wma","m4a","vob","dif","dv","flv","asf","mp2","mp3","ac3","aac","mpeg4","mp4","m4v","mpeg","mkv","mpg","mov","gvi","avi"];
 var valid_type = {}; types.forEach(function (t) { valid_type['.'+t] = true });
 var chunk_seconds = 5;
@@ -240,25 +239,11 @@ for (var li in rates)
         if (rates[li][oi] == undefined)
             rates[li][oi] = common_ffmpeg_opts[oi];
 
-function mkdir(dir) {
-    log('mkdir "'+dir+'"');
-    try {
-        fs.mkdirSync(dir);
-    } catch(e) {
-        if (e.code != 'EEXIST')
-            throw(e);
-    }
-}
-
 function Transcode(cookie, file, options) {
-    this.promises = [];
-
-    mkdir(transcode_dir);
     log("Transcode file: "+file+" with options: "+JSON.stringify(options));
 
     this.input_file = file;
     this.cookie = cookie;
-    this.dir = path.join(transcode_dir, this.cookie);
 
     this.meta = get_metadata(file);
 }
@@ -273,58 +258,76 @@ Transcode.session = function(_cookie, file, opts) {
 };
 
 Transcode.prototype.chunkname = function(rate, chunk_num){ return rate + "-" + chunk_num + ".ts" };
-Transcode.prototype.chunkpath = function(rate, chunk_num){ return path.join(this.dir, this.chunkname(rate,chunk_num)) }
 Transcode.prototype.chunk = function(rate, chunk_num) {
-    this.last_chunk_requested = chunk_num;
-
-    if (this.encoding)
-        log("current="+this.encoding.rate+"["+this.encoding.chunk_num+"], request="+rate+"["+chunk_num+"]");
-
-    var _this=this;
-    return this.kick(rate, chunk_num)
-           .then(function(filename) {
-               return Q.nfcall(fs.readFile, filename);
-           });
-}
-
-Transcode.prototype.kick = function(rate, chunk_num) {
-    if (this.encoding &&
-        this.encoding.rate == rate &&
-        this.encoding.chunk_num == chunk_num)
-        return this.encoding.promise;
+    if (!this.encoder ||
+        this.rate != rate ||
+        this.next_chunk_num != chunk_num)  {
+        log("Starting new transcode "+JSON.stringify([this.encoder ? "this.encoder" : null, this.rate, rate, this.next_chunk_num, chunk_num]));
+        this.start(rate, chunk_num);
+    }
 
     var _this = this;
-    return this.meta.then(function(media) {
-        var chunks = Math.ceil(media.duration / chunk_seconds);
-        if (chunk_num >= chunks)
-            return;
-
-        var filename = _this.chunkpath(rate,chunk_num);
-        if (fs.existsSync(filename))
-            var promise = Q.resolve(filename)
-        else {
-            if (_this.encoding && _this.encoding.process) {
-                log("Killing "+_this.encoding.process.pid);
-                _this.encoding.process.kill('SIGKILL');
-            }
-            _this.encoding = { rate: rate,
-                               chunk_num: chunk_num,
-                             };
-            var promise = _this.encoding.promise = _this.encode(rate, chunk_num, media);
-        }
-        return promise
-               .then(function(filename) {
-                   if (_this.encoding && filename == _this.chunkpath(_this.encoding.rate, _this.encoding.chunk_num))
-                       delete _this.encoding;
-                   if (_this.last_chunk_requested + encode_ahead > chunk_num)
-                       _this.kick(rate, chunk_num+1);
-                   log("kicking? "+_this.last_chunk_requested+" + "+encode_ahead+" < "+chunk_num);
-                   return filename;
-               }, function(error) {
-                   if (error != "killed")
-                       return Q.reject(error);
-               });
+    return this.next_chunk_promise.then(function(chunk) {
+        log("Kicking transcode");
+        _this.kick();
+        return chunk;
     });
+}
+
+Transcode.prototype.start = function(rate, chunk_num) {
+    var mpeg2ts = require('./mpeg2ts');
+    this.next_encoded_chunk = chunk_num;
+    this.next_chunk_num = chunk_num;
+    this.next_chunk_deferred = Q.defer();
+    this.next_chunk_promise = this.next_chunk_deferred.promise;
+    this.rate = rate;
+    this.fifo = [];
+
+    this.packetizer = new mpeg2ts.Packetizer();
+    this.chunkifier = new mpeg2ts.TimeBasedChunkifier(chunk_seconds/*, chunk_num*chunk_seconds*/);
+
+    if (this.encoder) {
+        log("Killing "+this.encoder.pid);
+        this.encoder.kill('SIGKILL');
+    }
+
+    var _this = this;
+    this.meta.then(function(media) {
+        _this.encode(rate, chunk_num, media, function(data) {
+            // log("Giving packetizer "+data.length+" bytes");
+            _this.packetizer.write(data);
+        });
+    });
+
+    this.packetizer.on('packet', function(packet) {
+        // log("Giving chunkifier a packet.");
+        _this.chunkifier.writePacket(packet);
+    });
+    this.chunkifier.on('chunk', function(packets) {
+        var chunk = Buffer.concat(packets);
+        log("got chunk: "+packets.length+" packets ("+chunk.length+" bytes)");
+        if (_this.next_encoded_chunk == _this.next_chunk_num)
+            _this.next_chunk_deferred.resolve(chunk);
+        else {
+            _this.fifo.push(chunk);
+            log("Pushing chunk into fifo (now "+_this.fifo.length+" deep)");
+            if (_this.fifo.length >= encode_ahead)
+                _this.encoder.stdout.pause();
+        }
+        _this.next_encoded_chunk++;
+    });
+}
+
+Transcode.prototype.kick = function() {
+    this.encoder.stdout.resume(); // the spice must flow
+
+    this.next_chunk_num++;
+    this.next_chunk_deferred = Q.defer();
+    this.next_chunk_promise = this.next_chunk_deferred.promise;
+    if (this.fifo.length) {
+        log("Shifting chunk out of fifo");
+        this.next_chunk_deferred.resolve(this.fifo.shift());
+    }
 }
 
 Array.prototype.flatten = function() { // Only flattens one level.
@@ -348,17 +351,13 @@ function shrink_to_fit(size, max) {
     return fit;
 }
 
-Transcode.prototype.encode = function(rate, chunk_num, media) {
-    mkdir(this.dir);
-    var filename         = this.chunkpath(rate,chunk_num);
-    var filename_partial = filename + ".partial";
+Transcode.prototype.encode = function(rate, chunk_num, media, data_callback) {
     var resize = shrink_to_fit({w:media.width, h:media.height}, {w:rates[rate].maxwidth, h:rates[rate].maxheight});
     var param;
     var ffmpeg = spawn('ffmpeg', param=[].concat([ '-y',
                                                    '-accurate_seek',
                                                    '-ss', chunk_num * chunk_seconds,
                                                    '-i', this.input_file,
-                                                   '-t', chunk_seconds,
                                                    '-f', 'mpegts',
                                                    '-codec:a', 'libmp3lame',
                                                    '-codec:v', 'h264',
@@ -367,36 +366,29 @@ Transcode.prototype.encode = function(rate, chunk_num, media) {
                                                  .filter(function(opt) { return opt[0] == '-' })
                                                  .map(function(opt) { return [ opt, rates[rate][opt] ] }).flatten(),
                                                  resize ? ['-filter:v', 'scale=width='+resize.w+':height='+resize.h] : [],
-                                                 [filename_partial])
+                                                 ["-"])
                                  );
-    this.encoding.process = ffmpeg;
+    this.encoder = ffmpeg;
     log("ffmpeg ["+ffmpeg.pid+"] started for "+rate+"["+chunk_num+"]: ffmpeg "+param.map(function(p) { return (''+p).match(/ /) ? '"'+p+'"' : p }).join(' '));
+
+    ffmpeg.stdout.resume();
+    ffmpeg.stdout.on('data', function (data) {
+         // log("Got data from ffmpeg ("+data.length+" bytes)");
+         data_callback(data);
+    });
+
     var stderr = '';
     ffmpeg.stderr.on('data', function (data) {
          stderr += data;
     });
-    var deferred = Q.defer();
-    var _this = this;
+
     ffmpeg.on('close', function(code) {
         log("ffmpeg ["+ffmpeg.pid+"] exited ("+code+")");
-        if (code != 0)
-            return fs.unlink(filename_partial, function() {
-                       if (code == undefined) {
-                           deferred.reject("killed");
-                       } else {
-                           log(stderr+"\n"+
-                                       "error: ffmpeg exited with code "+code);
-                           deferred.reject("ffmpeg exited with code "+code);
-                       }
-                   });
-        return Q.nfcall(fs.rename, filename_partial, filename)
-               .then(function(data) {
-                   deferred.resolve(filename);
-               }, function(err) {
-                   deferred.reject(err);
-               });
+        if (code != 0 && code != undefined) {
+            log(stderr+"\n"+
+                "error: ffmpeg exited with code "+code);
+        }
     });
-    return deferred.promise;
 }
 
 Transcode.prototype.master_m3u8 = function() {
