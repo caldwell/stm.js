@@ -406,7 +406,7 @@ function Encode(input_file, rate, chunk_num, media, data_callback) {
     });
 
     this.process.on('close', function(code) {
-        log("ffmpeg ["+this.process.pid+"] exited ("+code+")");
+        log("ffmpeg ["+_this.process.pid+"] exited ("+code+")");
         if (code != 0 && code != undefined) {
             log(stderr+"\n"+
                 "error: ffmpeg exited with code "+code);
