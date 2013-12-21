@@ -127,14 +127,16 @@ function handle_http_request(req, resp) {
         if (rate == "index" && filetype == "m3u8") {
             resp.writeHead(200, { 'Content-Type': 'application/vnd.apple.mpegurl' });
             resp.end(session.transcode.master_m3u8());
+            return;
         } else if (filetype == "m3u8") {
             log("Getting m3u8 for rate "+rate);
-            return session.transcode.m3u8(rate)
+            session.transcode.m3u8(rate)
                    .then(function(data) {
                        resp.writeHead(200, { 'Content-Type': 'application/vnd.apple.mpegurl' });
                        resp.end(data);
                    })
                    .done();
+            return;
         }
 
         log("Getting chunk "+chunknum+" for rate "+rate);
