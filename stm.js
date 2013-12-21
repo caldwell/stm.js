@@ -255,6 +255,11 @@ function Transcode(file, options) {
     this.meta = get_metadata(file);
 }
 
+Transcode.prototype.stop = function() {
+    if (this.encoder)
+        this.encoder.kill();
+}
+
 Transcode.prototype.chunkname = function(rate, chunk_num){ return rate + "-" + chunk_num + ".ts" };
 Transcode.prototype.chunk = function(rate, chunk_num) {
     if (this.encoder_error) {
@@ -290,8 +295,7 @@ Transcode.prototype.start = function(rate, chunk_num) {
     this.packetizer = new mpeg2ts.Packetizer();
     this.chunkifier = new mpeg2ts.TimeBasedChunkifier(chunk_seconds/*, chunk_num*chunk_seconds*/);
 
-    if (this.encoder)
-        this.encoder.kill();
+    this.stop();
 
     var _this = this;
     this.meta.then(function(media) {
