@@ -376,6 +376,13 @@ function Encode(input_file, rate, chunk_num, media, data_callback) {
                                                    '-accurate_seek',
                                                    '-ss', chunk_num * chunk_seconds,
                                                    '-i', input_file,
+                                                   // max_delay seems like an undocumented hack. It's units are bizarre (what's with the *2?) and
+                                                   // it doesn't really describe what it does. What it really does is add an offset to the PCR in
+                                                   // the PES header, which is exactly what the StreamToMe client needs to make the rate stream
+                                                   // transitions seamless. The units are in ffmpeg's AV_TIME_BASE (see
+                                                   // libavformat/mpegtsenc.c:mpegts_write_packet_internal).  Sadly, the internal representation
+                                                   // of max_delay in ffmpeg is an int, so it doesn't work beyond an hour or so. :-(
+                                                   '-max_delay', Math.min(chunk_num * chunk_seconds * 1000000/2, 0x7ffffff),
                                                    '-f', 'mpegts',
                                                    '-codec:a', 'libmp3lame',
                                                    '-codec:v', 'h264',
