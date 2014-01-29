@@ -56,5 +56,12 @@ TimeBasedChunkifier.prototype.writePacket = function(packet) {
     }
 }
 
+TimeBasedChunkifier.prototype.flush = function() {
+    if (this.packets.length) {
+        this.emit('chunk', this.packets);
+        this.packets = [];
+    }
+}
+
 exports.Packetizer = Packetizer;
 exports.TimeBasedChunkifier = TimeBasedChunkifier;
