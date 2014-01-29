@@ -38,7 +38,7 @@ function TimeBasedChunkifier(chunk_seconds) {
     events.EventEmitter.call(this);
     this.packets = [];
     this.chunk_seconds = chunk_seconds;
-    this.next_chunk_time = this.chunk_seconds;
+    this.next_chunk_time = -1;
 }
 util.inherits(TimeBasedChunkifier, events.EventEmitter);
 
@@ -61,6 +61,9 @@ TimeBasedChunkifier.prototype.writePacket = function(packet) {
 
         if (this.pcr_offset)
             packet.writeUInt32BE(pcr_0 + this.pcr_offset, 6);
+
+        if (this.next_chunk_time < 0) // Base ourselves off the first PCR. It maybe not be zero.
+            this.next_chunk_time = seconds + this.chunk_seconds;
 
         if (seconds > this.next_chunk_time) {
             this.emit('chunk', this.packets);
