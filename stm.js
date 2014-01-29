@@ -1,5 +1,5 @@
 //  Copyright (c) 2013 David Caldwell,  All Rights Reserved.
-var app_port = 9968;
+var app_port = 9969;
 var app_root = [ { path:'/home/david/Movies/', name:'Movies' } ];
 var types= ["aif","m2ts","ts","flac","wmv","ogm","ogg","wma","m4a","vob","dif","dv","flv","asf","mp2","mp3","ac3","aac","mpeg4","mp4","m4v","mpeg","mkv","mpg","mov","gvi","avi"];
 var valid_type = {}; types.forEach(function (t) { valid_type['.'+t] = true });
