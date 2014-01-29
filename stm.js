@@ -300,12 +300,7 @@ Transcode.prototype.start = function(rate, chunk_num) {
     var _this = this;
     this.meta.then(function(media) {
         log("Starting encode for "+_this.input_file+" "+rate+"["+chunk_num+"]");
-        try {
         _this.encoder = new Encode(_this.input_file, rate, chunk_num, media);
-        } catch(e) {
-            log(e.message);
-            throw(e);
-        }
         _this.encoder.on('data', function(data) {
             // log("Giving packetizer "+data.length+" bytes");
             _this.packetizer.write(data);
@@ -317,7 +312,7 @@ Transcode.prototype.start = function(rate, chunk_num) {
             _this.encoder_error = message;
             log("error! "+message);
         });
-    });
+    }).done();
 
     this.packetizer.on('packet', function(packet) {
         // log("Giving chunkifier a packet.");
