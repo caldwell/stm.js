@@ -2,6 +2,7 @@
   "dependencies": {
       "glob": "",
       "q": "",
+      "js-yaml": "",
       "navcodec": "git+https://github.com/caldwell/navcodec.git#faac0a76dd387b1e1d37e407f074cb3c3b5ee27f"
   }
 }
