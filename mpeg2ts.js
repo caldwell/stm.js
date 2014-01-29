@@ -57,6 +57,7 @@ TimeBasedChunkifier.prototype.writePacket = function(packet) {
         var pcr_hi = (pcr_0 & 0x7fffffff) << 1 | (pcr_1 & 0x8000 ? 1 : 0);
         var pcr_lo = pcr_1 & 0x3f;
         var seconds = (pcr_hi/90000 + pcr_lo/27000000);
+        this.emit('pcr', seconds, pcr_hi, pcr_lo, pcr_0, pcr_1);
         //console.log('PCR: '+seconds+' <- '+pcr_hi+'_'+pcr_lo+' ['+pcr_0.toString(16)+' '+pcr_1.toString(16)+']');
 
         if (this.pcr_offset)
