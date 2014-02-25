@@ -403,6 +403,7 @@ function Encode(input_file, rate, chunk_num, media, data_callback) {
                                                    '-f', 'mpegts',
                                                    '-codec:a', 'libmp3lame',
                                                    '-codec:v', 'h264',
+                                                   '-vsync', 'passthrough', // keep the framerate consistent
                                                  ],
                                                  Object.keys(rates[rate])
                                                  .filter(function(opt) { return opt[0] == '-' })
