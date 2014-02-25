@@ -22,6 +22,7 @@ var types= config.types || ["aif","m2ts","ts","flac","wmv","ogm","ogg","wma","m4
 var valid_type = {}; types.forEach(function (t) { valid_type['.'+t] = true });
 var chunk_seconds = config.chunk_seconds || 10;
 var encode_ahead = config.encode_ahead || 5;
+var session_timeout_seconds = config.session_timeout_seconds || 3600; // pause for an hour, lose your transcode.
 
 var path     = require('path');
 var fs       = require('fs');
@@ -140,6 +141,15 @@ function handle_http_request(req, resp) {
             session.transcode = new Transcode(videofile, opts);
             log("Starting transcode for session "+session_id);
         }
+
+        if (session.transcode.timeout)
+            clearTimeout(session.transcode.timeout);
+        session.transcode.timeout = setTimeout(function() {
+            log("Timing out transcode for session "+session_id);
+            if (session.transcode)
+                session.transcode.stop();
+            delete session.transcode;
+        }, session_timeout_seconds * 1000);
 
         if (rate == "index" && filetype == "m3u8") {
             resp.writeHead(200, { 'Content-Type': 'application/vnd.apple.mpegurl' });
