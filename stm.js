@@ -98,25 +98,33 @@ function handle_http_request(req, resp) {
         var file = decodeURIComponent(path.join(app_root[m[1]].path, m[2] || ''));
 
 
+        var send_response = function(status, json, thumbnail) {
+            if (!thumbnail) thumbnail = new Buffer('');
+            resp.writeHead(status, { 'Content-Type': 'application/json',
+                                     'Json-Length': json.length,
+                                     'Content-Length': json.length + thumbnail.length,
+                                });
+            // Yes, we catenate text and binary data together under the banner of application/json. Don't blame me, I didn't design this.
+            resp.end(Buffer.concat([new Buffer(json),thumbnail]))
+            log("metadata: "+json);
+        }
+
         // ffmpeg-stm returns:
         // {"artist":"Buffy The Vampire Slayer","title":"When She Was Bad","length":2725.034667,"audio_streams":[{"language":"eng","trans":"-----"},{"language":"eng","trans":"c----"}],"subtitle_streams":[],"has_video":true,"trans":"--h-v--b--"}
         // {"length":2647.776000,"audio_streams":[{"language":"und","trans":"ccb--"}],"subtitle_streams":[],"has_video":true,"trans":"-lh-vwh---"}
         Q.all([get_metadata(file),
                get_thumbnail(file)])
         .spread(function(media, thumbnail) {
-            var json = JSON.stringify({
+            send_response(200, JSON.stringify({
                 artist: media.metadata.show,
                 title: media.metadata.title,
                 length: media.duration,
                 description: media.metadata.description
-            });
-            resp.writeHead(200, { 'Content-Type': 'application/json',
-                                  'Json-Length': json.length,
-                                  'Content-Length': json.length + thumbnail.length,
-                                });
-            // Yes, we catenate text and binary data together under the banner of application/json. Don't blame me, I didn't design this.
-            resp.end(Buffer.concat([new Buffer(json),thumbnail]))
-            log("metadata: "+json);
+            }), thumbnail);
+        })
+        .catch(function(reason) { // I don't know what ffmpeg-stm returns on error. I made this up. StreamToMe deals with the 500 just fine.
+            log("Failed: "+reason.message+"\n"+reason.stack);
+            send_response(500, JSON.stringify({ error: reason.message}));
         })
         .done();
     }
