@@ -170,6 +170,11 @@ function handle_http_request(req, resp) {
                        resp.writeHead(200, { 'Content-Type': 'application/vnd.apple.mpegurl' });
                        resp.end(data);
                    })
+                   .catch(function(reason) {
+                       resp.writeHead(500, { 'Content-Type': 'text/plain' });
+                       resp.end(reason.message);
+                       log(".m3u8 failed: "+reason.message+"\n"+reason.stack);
+                   })
                    .done();
             return;
         }
