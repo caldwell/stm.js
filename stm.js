@@ -56,7 +56,8 @@ function log(message) {
 var session_data = {};
 
 function handle_http_request(req, resp) {
-    log(req.method + ' ' + req.url);
+  log(req.method + ' ' + req.url);
+  try {
 
     var cookie = {};
     (req.headers.cookie || "").split(/; */).forEach(function(c) {
@@ -207,6 +208,12 @@ function handle_http_request(req, resp) {
 
     else
         resp.end();
+
+  } catch(e) {
+      log("Request failed:: "+e.message+"\n"+e.stack);
+      resp.writeHead(500, { 'Content-Type': 'text/plain' });
+      resp.end("Internal error. Check logs");
+  }
 }
 
 
