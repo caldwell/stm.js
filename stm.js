@@ -41,7 +41,6 @@ var path     = require('path');
 var fs       = require('fs');
 var glob     = require('glob');
 var Q        = require('q');
-var navcodec = require('navcodec');
 var spawn    = require('child_process').spawn;
 var events   = require('events');
 var util     = require('util');
@@ -223,20 +222,41 @@ function handle_http_request(req, resp) {
 
 
 function get_metadata(file) {
-    return navcodec.open(file)
-        .then(function(media) {
-            log("Metadata for: "+file);
-            log(media.metadata);
-            log({duration: media.duration,
-                         width: media.width,
-                         height: media.height,
-                         videoBitrate: media.videoBitrate,
-                         audioBitrate: media.audioBitrate,
-                         bitrate: media.bitrate,
-                         samplerate: media.samplerate,
-                        });
-            return Q.resolve(media);
-        });
+    var param;
+    var ffprobe = spawn('ffprobe', param=['-loglevel', 'quiet',
+                                         '-print_format', 'json',
+                                         '-i', file,
+                                         '-show_format',
+                                         '-show_frames',
+                                         '-show_chapters',
+                                         '-select_streams', 'v',
+                                         '-read_intervals', '10%+00.1'
+                                         ]);
+    log('ffprobe: '+param.join(' '));
+    var deferred = Q.defer();
+    var meta_json='', stderr='';
+    ffprobe.stdout.on('data', function(data) { meta_json += data; });
+    ffprobe.stderr.on('data', function(data) { stderr += data; });
+    ffprobe.on('close', function(code) {
+        if (code != 0) {
+            deferred.reject(new Error(stderr+"\n"+
+                                      "ffprobe failed with code "+code+"\n"));
+            return
+        }
+        try {
+            var meta = JSON.parse(meta_json);
+            deferred.resolve({ // Convert the ffprobe structure so it's more or less compatible with what navcodec used to return
+                duration: meta.format.duration-0,
+                width: meta.frames[0].width-0,
+                height: meta.frames[0].height-0,
+                metadata: meta.format.tags,
+            });
+        } catch(e) {
+            deferred.reject(new Error("failed to parse ffprobe output: "+e));
+            return
+        }
+    });
+    return deferred.promise;
 }
 
 function get_thumbnail(file) {
