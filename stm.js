@@ -106,6 +106,11 @@ function handle_http_request(req, resp) {
                                         return { name: f.name, type: f.stats.isDirectory() ? 'folder' : 'file' }
                                     })));
         })
+        .catch(function(reason) {
+            log("Failed: "+reason.message+"\n"+reason.stack);
+            resp.writeHead(500, { 'Content-Type': 'application/json' });
+            resp.end(JSON.stringify({ error: reason.message}));
+        })
         .done();
     }
     else if (m = url.pathname.match(/^\/metadata\/(\d+)(?:\/(.*))?$/)) {
