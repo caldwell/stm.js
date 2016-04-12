@@ -14,10 +14,23 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
-var config   = require('js-yaml').safeLoad(require('fs').readFileSync(process.env.HOME + '/.stm-config.yaml', 'utf8'));
+var docopt = require('docopt').docopt;
+doc = "\n"
+    + "Usage:\n"
+    + "   stm [-d <share> | --dir=<share>...] [options]\n"
+    + "Options:\n"
+    + "   -p <port>, --port=<port>       Set the port to listen on\n"
+    + "   --config=<config-file>         Read the config file instead of ~/.stm-config.yaml\n"
+    + "   -d <share>, --dir=<share>...   Specify directories to serve: <share> can be a plain dir or '<dir>=<share-name>' format.\n"
+    + "";
+var opt = docopt(doc);
+if (opt['--dir'].length) var serve_paths = opt['--dir'].map(function(d) { if (m=d.match(/^(.*)=([^=]+)$/)) { return { path: m[1], name: m[2] } }
+                                                                          m=d.match(/(?:\/|^)([^\/]+)$/); return { path: d, name: m[1] } });
 
-var app_port = config.port || 9969;
-var app_root = config.serve_paths || (function() { throw "Fatal: There are no 'serve_paths' in the config file!" })();
+var config   = require('js-yaml').safeLoad(require('fs').readFileSync(opt['--config'] || (process.env.HOME + '/.stm-config.yaml'), 'utf8'));
+
+var app_port = opt['--port'] || config.port || 9969;
+var app_root = serve_paths || config.serve_paths || (function() { throw "Fatal: There are no 'serve_paths' in the config file!" })();
 var types= config.types || ["aif","m2ts","ts","flac","wmv","ogm","ogg","wma","m4a","vob","dif","dv","flv","asf","mp2","mp3","ac3","aac","mpeg4","mp4","m4v","mpeg","mkv","mpg","mov","gvi","avi"];
 var valid_type = {}; types.forEach(function (t) { valid_type['.'+t] = true });
 var chunk_seconds = config.chunk_seconds || 10;
